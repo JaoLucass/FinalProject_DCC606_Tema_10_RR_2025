@@ -25,7 +25,7 @@ def tsp_model(dist, verbose=False, metrics_csv=None, label=None, dist_threshold=
     p = [Int(f"p_{i}") for i in range(n)]
     solver = Optimize()
 
-    # Tempo: início modelagem
+    # --- Tempo: início modelagem
     t0 = time.time()
 
     # Vamos acumular restrições para poder contar
@@ -42,7 +42,7 @@ def tsp_model(dist, verbose=False, metrics_csv=None, label=None, dist_threshold=
     # Adiciona todas as restrições ao solver
     solver.add(*constraints)
 
-    # Poda simbólica com quantificadores (MBQI)
+    # --- Poda simbólica com quantificadores (MBQI)
     if dist_threshold is not None:
         a = Int('a')
         b = Int('b')
@@ -52,7 +52,7 @@ def tsp_model(dist, verbose=False, metrics_csv=None, label=None, dist_threshold=
         # Adiciona restrição quantificada: para todo i, a, b, se a != b e dist[a][b] > threshold, então p[i] != a ou p[(i+1)%n] != b
         solver.add(ForAll([i, a, b], Implies(And(i >= 0, i < n, a >= 0, a < n, b >= 0, b < n, a != b, dist_matrix[a][b] > dist_threshold), Or(p[i] != a, p[(i+1)%n] != b))))
 
-    # Restrição de subtours (MTZ)
+    # --- Restrição de subtours (MTZ)
     # Variáveis auxiliares u[i] para cada cidade
     u = [Int(f"u_{i}") for i in range(n)]
     # Domínio das variáveis auxiliares
@@ -64,7 +64,7 @@ def tsp_model(dist, verbose=False, metrics_csv=None, label=None, dist_threshold=
             if i != j and i != 0 and j != 0:
                 solver.add(Implies(And(p[i] == i, p[(i+1)%n] == j), u[i] + 1 == u[j]))
 
-    # Função objetivo simbólica SEM filtro de threshold
+    # --- Função objetivo simbólica SEM filtro de threshold
     custo_total = Sum([
         Sum([
             If(And(p[i] == a, p[(i + 1) % n] == b), dist[a][b], 0)
@@ -80,24 +80,53 @@ def tsp_model(dist, verbose=False, metrics_csv=None, label=None, dist_threshold=
 
     # --- Tempo: resolução
     t2 = time.time()
-    result = solver.check()
-    t3 = time.time()
-    tempo_resolucao = t3 - t2
-    tempo_total = t3 - t0
-
-    # Número de restrições duras efetivamente no solver
-    # (note: a função objetivo não conta como "assertion")
-    num_restricoes = len(solver.assertions())  # após add(*constraints)
-
-    if result == sat:
-        modelo = solver.model()
-        rota = [modelo.evaluate(p[i]).as_long() for i in range(n)]
-        rota.append(rota[0])  # fecha o ciclo
-
-        # custo concreto calculado em Python p/ clareza
-        custo = sum(dist[rota[i]][rota[i+1]] for i in range(n))
-
-        # Impressão opcional
+    # --- Lazy constraints para subtours ---
+    subtour_found = True
+    max_lazy_iters = 20
+    lazy_iter = 0
+    tempo_resolucao = 0
+    rota = None
+    custo = None
+    while subtour_found and lazy_iter < max_lazy_iters:
+        t2_iter = time.time()
+        result = solver.check()
+        t3_iter = time.time()
+        tempo_resolucao += t3_iter - t2_iter
+        num_restricoes = len(solver.assertions())
+        if result == sat:
+            modelo = solver.model()
+            rota = [modelo.evaluate(p[i]).as_long() for i in range(n)]
+            rota.append(rota[0])
+            # Detecta subtours
+            visited = set()
+            subtours = []
+            for start in range(n):
+                if start in visited:
+                    continue
+                tour = [start]
+                visited.add(start)
+                next_city = modelo.evaluate(p[(tour[-1]+1)%n]).as_long()
+                while next_city not in tour:
+                    tour.append(next_city)
+                    visited.add(next_city)
+                    next_city = modelo.evaluate(p[(tour[-1]+1)%n]).as_long()
+                if len(tour) < n:
+                    subtours.append(tour)
+            if subtours:
+                # Adiciona restrição para proibir cada subtour
+                for st in subtours:
+                    solver.add(Or([p[i] != i for i in st]))
+                lazy_iter += 1
+            else:
+                subtour_found = False
+                custo = sum(dist[rota[i]][rota[i+1]] for i in range(n))
+        else:
+            subtour_found = False
+            rota = None
+            custo = None
+    tempo_total = modelagem_tempo + tempo_resolucao
+    # Impressão opcional
+    if rota is not None:
         print("\n📊 Métricas de Execução")
         print(f"🔖 Instância: {label if label else '(sem rótulo)'}")
         print(f"🔢 Número de cidades (n): {n}")
@@ -108,13 +137,10 @@ def tsp_model(dist, verbose=False, metrics_csv=None, label=None, dist_threshold=
         print(f"⏳ Tempo total: {tempo_total:.4f} s")
         print(f"💰 Custo total da rota: {custo}")
         print(f"🔁 Rota: {' → '.join(map(str, rota))}")
-
         if verbose:
             print("\n📤 Modelo SMT:")
             for v in p:
                 print(f"{v} = {modelo.evaluate(v)}")
-
-        # Registrar métricas em CSV, se solicitado
         if metrics_csv is not None:
             _salvar_metricas_csv(
                 metrics_csv,
@@ -130,13 +156,9 @@ def tsp_model(dist, verbose=False, metrics_csv=None, label=None, dist_threshold=
                     "rota": "-".join(map(str, rota)),
                 }
             )
-
         return rota, custo
-
     else:
         print("❌ Nenhuma solução encontrada.")
-
-        # Ainda assim registrar no CSV (sem rota)
         if metrics_csv is not None:
             _salvar_metricas_csv(
                 metrics_csv,
@@ -185,7 +207,7 @@ def calcular_threshold(dist, percentil=90):
         k = len(all_distances) - 1
     return all_distances[k]
 
-# Exemplo de uso isolado
+# --- Exemplo de uso isolado
 if __name__ == "__main__":
     dist = [
         [0, 10, 15, 20],
