@@ -1,2 +1,7 @@
 # Ignore Python virtual environment folders
 venv/
+# Ignore analysis and benchmark results folders
+resultados_analise/
+resultados_benchmark/
+# Ignore Python cache folders
+__pycache__/

@@ -25,7 +25,7 @@ def tsp_model(dist, verbose=False, metrics_csv=None, label=None, dist_threshold=
     p = [Int(f"p_{i}") for i in range(n)]
     solver = Optimize()
 
-    # --- Tempo: início modelagem
+    # Tempo: início modelagem
     t0 = time.time()
 
     # Vamos acumular restrições para poder contar
@@ -42,7 +42,7 @@ def tsp_model(dist, verbose=False, metrics_csv=None, label=None, dist_threshold=
     # Adiciona todas as restrições ao solver
     solver.add(*constraints)
 
-    # --- Poda simbólica com quantificadores (MBQI)
+    # Poda simbólica com quantificadores (MBQI)
     if dist_threshold is not None:
         a = Int('a')
         b = Int('b')
@@ -52,7 +52,19 @@ def tsp_model(dist, verbose=False, metrics_csv=None, label=None, dist_threshold=
         # Adiciona restrição quantificada: para todo i, a, b, se a != b e dist[a][b] > threshold, então p[i] != a ou p[(i+1)%n] != b
         solver.add(ForAll([i, a, b], Implies(And(i >= 0, i < n, a >= 0, a < n, b >= 0, b < n, a != b, dist_matrix[a][b] > dist_threshold), Or(p[i] != a, p[(i+1)%n] != b))))
 
-    # --- Função objetivo simbólica SEM filtro de threshold
+    # Restrição de subtours (MTZ)
+    # Variáveis auxiliares u[i] para cada cidade
+    u = [Int(f"u_{i}") for i in range(n)]
+    # Domínio das variáveis auxiliares
+    for i in range(n):
+        solver.add(u[i] >= 0, u[i] < n)
+    # MTZ: Para todo i != j, se p[i] == a e p[(i+1)%n] == b e a != 0 e b != 0, então u[a] + 1 == u[b]
+    for i in range(n):
+        for j in range(n):
+            if i != j and i != 0 and j != 0:
+                solver.add(Implies(And(p[i] == i, p[(i+1)%n] == j), u[i] + 1 == u[j]))
+
+    # Função objetivo simbólica SEM filtro de threshold
     custo_total = Sum([
         Sum([
             If(And(p[i] == a, p[(i + 1) % n] == b), dist[a][b], 0)
@@ -173,7 +185,7 @@ def calcular_threshold(dist, percentil=90):
         k = len(all_distances) - 1
     return all_distances[k]
 
-# --- Exemplo de uso isolado
+# Exemplo de uso isolado
 if __name__ == "__main__":
     dist = [
         [0, 10, 15, 20],
