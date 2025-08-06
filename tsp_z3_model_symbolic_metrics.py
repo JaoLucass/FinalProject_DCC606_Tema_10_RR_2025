@@ -3,24 +3,93 @@ import csv
 import time
 from z3 import *
 
-def tsp_model(dist, verbose=False, metrics_csv=None, label=None, dist_threshold=None):
+def tsp_model_original(dist, verbose=False, metrics_csv=None, label=None, dist_threshold=None):
     """
-    Resolve o TSP via modelo de permutação simbólica com Z3 Optimize
-    e (opcionalmente) salva métricas de execução em CSV.
+    Variante original: MBQI + subtour + lazy constraints (igual à função tsp_model).
+    """
+    return tsp_model(dist, verbose=verbose, metrics_csv=metrics_csv, label=label, dist_threshold=dist_threshold)
 
-    Parâmetros
-    ----------
-    dist : list[list[int]]
-        Matriz de distâncias d[i][j].
-    verbose : bool
-        Se True, imprime o modelo obtido.
-    metrics_csv : str | None
-        Caminho para arquivo CSV onde registrar métricas.
-        Se None, não salva.
-    label : str | None
-        Nome/identificador da instância (ex: "n=6_seed42").
-        Útil quando salvando métricas.
+def tsp_model_mbqi(dist, verbose=False, metrics_csv=None, label=None, dist_threshold=None):
     """
+    Variante MBQI puro: sem restrição de subtours (MTZ/lazy).
+    """
+    n = len(dist)
+    p = [Int(f"p_{i}") for i in range(n)]
+    solver = Optimize()
+    constraints = []
+    for i in range(n):
+        constraints.append(p[i] >= 0)
+        constraints.append(p[i] < n)
+    constraints.append(Distinct(p))
+    solver.add(*constraints)
+    # MBQI: Adiciona restrições para pares (a, b) com dist[a][b] > threshold
+    if dist_threshold is not None:
+        for a in range(n):
+            for b in range(n):
+                if a != b and dist[a][b] > dist_threshold:
+                    for i in range(n):
+                        solver.add(Or(p[i] != a, p[(i+1)%n] != b))
+    custo_total = Sum([
+        Sum([
+            If(And(p[i] == a, p[(i + 1) % n] == b), dist[a][b], 0)
+            for a in range(n) for b in range(n) if a != b
+        ])
+        for i in range(n)
+    ])
+    solver.minimize(custo_total)
+    t0 = time.time()
+    result = solver.check()
+    t1 = time.time()
+    num_restricoes = len(solver.assertions())
+    if result == sat:
+        modelo = solver.model()
+        rota = [modelo.evaluate(p[i]).as_long() for i in range(n)]
+        rota.append(rota[0])
+        custo = sum(dist[rota[i]][rota[i+1]] for i in range(n))
+        print(f"[MBQI] Tempo total: {t1-t0:.4f}s | Custo: {custo} | Rota: {rota}")
+        if metrics_csv is not None:
+            _salvar_metricas_csv(
+                metrics_csv,
+                {
+                    "instancia": label if label else "",
+                    "n": n,
+                    "num_vars": len(p),
+                    "num_restricoes": num_restricoes,
+                    "tempo_modelagem_s": t1-t0,
+                    "tempo_resolucao_s": 0,
+                    "tempo_total_s": t1-t0,
+                    "custo": custo,
+                    "rota": "-".join(map(str, rota)),
+                }
+            )
+        return rota, custo
+    else:
+        print("[MBQI] Nenhuma solução encontrada.")
+        if metrics_csv is not None:
+            _salvar_metricas_csv(
+                metrics_csv,
+                {
+                    "instancia": label if label else "",
+                    "n": n,
+                    "num_vars": len(p),
+                    "num_restricoes": num_restricoes,
+                    "tempo_modelagem_s": t1-t0,
+                    "tempo_resolucao_s": 0,
+                    "tempo_total_s": t1-t0,
+                    "custo": "",
+                    "rota": "",
+                }
+            )
+        return None, None
+
+def tsp_model_mbqi_subtour(dist, verbose=False, metrics_csv=None, label=None, dist_threshold=None):
+    """
+    Variante MBQI + restrição de subtours (igual à função tsp_model atual).
+    """
+    return tsp_model(dist, verbose=verbose, metrics_csv=metrics_csv, label=label, dist_threshold=dist_threshold)
+
+def tsp_model(dist, verbose=False, metrics_csv=None, label=None, dist_threshold=None):
+    
     n = len(dist)
     p = [Int(f"p_{i}") for i in range(n)]
     solver = Optimize()
@@ -44,13 +113,11 @@ def tsp_model(dist, verbose=False, metrics_csv=None, label=None, dist_threshold=
 
     # --- Poda simbólica com quantificadores (MBQI)
     if dist_threshold is not None:
-        a = Int('a')
-        b = Int('b')
-        i = Int('i')
-        # Cria uma matriz de distâncias para acesso simbólico
-        dist_matrix = dist
-        # Adiciona restrição quantificada: para todo i, a, b, se a != b e dist[a][b] > threshold, então p[i] != a ou p[(i+1)%n] != b
-        solver.add(ForAll([i, a, b], Implies(And(i >= 0, i < n, a >= 0, a < n, b >= 0, b < n, a != b, dist_matrix[a][b] > dist_threshold), Or(p[i] != a, p[(i+1)%n] != b))))
+        for a in range(n):
+            for b in range(n):
+                if a != b and dist[a][b] > dist_threshold:
+                    for i in range(n):
+                        solver.add(Or(p[i] != a, p[(i+1)%n] != b))
 
     # --- Restrição de subtours (MTZ)
     # Variáveis auxiliares u[i] para cada cidade
