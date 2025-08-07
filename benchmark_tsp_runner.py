@@ -2,7 +2,7 @@
 import os
 import random
 import numpy as np
-from tsp_z3_model_symbolic_metrics import tsp_model_mbqi, tsp_model_mbqi_subtour
+from tsp_z3_model_symbolic_metrics import tsp_model_mbqi, tsp_model_mbqi_subtour, tsp_model_original
 
 def gerar_matriz_distancias(n, seed=0, min_val=5, max_val=100):
     """
@@ -26,12 +26,15 @@ def benchmark_variando_n_seeds(n_min=4, n_max=10, seeds=6, output_csv="benchmark
     os.makedirs(pasta_benchmark, exist_ok=True)
     output_csv_path_mbqi = os.path.join(pasta_benchmark, "benchmark_mbqi_" + output_csv)
     output_csv_path_subtour = os.path.join(pasta_benchmark, "benchmark_mbqi_subtour_" + output_csv)
+    output_csv_path_original = os.path.join(pasta_benchmark, "benchmark_tsp_z3.csv")
     for n in range(n_min, n_max + 1):
         for seed in range(1, seeds + 1):
             instancia_nome = f"n={n}_seed{seed}"
-            print(f"\n🚀 Executando MBQI {instancia_nome}...")
             dist = gerar_matriz_distancias(n, seed=seed)
             threshold = calcular_threshold(dist, percentil=90)
+            print(f"\n🚀 Executando ORIGINAL {instancia_nome}...")
+            tsp_model_original(dist, verbose=False, metrics_csv=output_csv_path_original, label=instancia_nome, dist_threshold=threshold)
+            print(f"\n🚀 Executando MBQI {instancia_nome}...")
             tsp_model_mbqi(dist, verbose=False, metrics_csv=output_csv_path_mbqi, label=instancia_nome, dist_threshold=threshold)
             print(f"\n🚀 Executando MBQI+Subtour {instancia_nome}...")
             tsp_model_mbqi_subtour(dist, verbose=False, metrics_csv=output_csv_path_subtour, label=instancia_nome, dist_threshold=threshold)
